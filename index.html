@@ -250,8 +250,8 @@ td.short { color: var(--late); font-weight: 600; }
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script src="firebase-config.js"></script>
-<script src="import-core.js"></script>
+<script src="firebase-config.js?v=3"></script>
+<script src="import-core.js?v=3"></script>
 <script>
 (() => {
 const $ = (s, r = document) => r.querySelector(s);
@@ -572,7 +572,9 @@ function writeNote(po, patch) {
 function writeErr(e) {
   if (e?.code === "permission-denied") return "Your account isn't on the board's access list. Ask the board admin to add your email.";
   if (e?.code === "resource-exhausted") return "The board's storage is full. Old received POs need clearing out.";
-  return `Couldn't save${e?.code ? " (" + e.code + ")" : ""}. Check your connection and try again; if it keeps happening, send this message to whoever set up the board.`;
+  console.error("Save failed", e);
+  const detail = e?.code || e?.message || String(e);
+  return `Couldn't save (${String(detail).slice(0, 140)}). Try again; if it keeps happening, send this message to whoever set up the board.`;
 }
 
 // ---------- import ----------
@@ -696,6 +698,7 @@ function startData() {
 }
 function boot() {
   const cfg = window.FIREBASE_CONFIG;
+  if (window.ImportCore && !window.ImportCore.toStorePos) { S.setupMsg = `<div class="empty"><h2>Update loading</h2><p>An older copy of the board is cached. Reload the page in a minute (Ctrl + F5).</p></div>`; S.loaded.months = true; render(); return; }
   if (!window.firebase || !window.ImportCore || !cfg || !cfg.apiKey || /^PASTE/.test(cfg.apiKey)) {
     S.setupMsg = `<div class="empty"><h2>Not connected yet</h2><p>Paste your Firebase project settings into firebase-config.js. The README walks through it.</p></div>`;
     S.loaded.months = true; render(); return;
