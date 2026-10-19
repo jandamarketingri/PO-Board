@@ -1,0 +1,14 @@
+{
+  "name": "po-board-import",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pushes the MAS printer PO export into the PO board's Firebase database.",
+  "main": "import.js",
+  "scripts": {
+    "import": "node import.js"
+  },
+  "dependencies": {
+    "exceljs": "4.4.0",
+    "firebase-admin": "12.7.0"
+  }
+}

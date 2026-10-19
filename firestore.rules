@@ -1,0 +1,21 @@
+rules_version = '2';
+
+// Who can use the board. Only signed-in people whose email is on this list can read or change anything.
+// To add someone: create their login in Firebase Authentication, add their email below (lowercase), and publish the rules.
+// The auto-import script uses a service account, which bypasses these rules.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isMember() {
+      return request.auth != null
+        && request.auth.token.email != null
+        && request.auth.token.email.lower() in [
+          "you@yourcompany.com",
+          "pm@yourcompany.com"
+        ];
+    }
+
+    match /{document=**} {
+      allow read, write: if isMember();
+    }
+  }
+}
