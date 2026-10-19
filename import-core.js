@@ -109,5 +109,15 @@
     return next;
   }
 
-  return { ALIASES, DEFAULT_MAP, normPO, toISO, monthOf, rowsToIncoming, planImport, buildMonthWrites };
+  // Firestore can't store a list inside a list, so each size line is saved as a small object:
+  // { p: print, i: item, d: description, g: product line, o: ordered, r: received, b: backordered }.
+  // In memory (and in the page) lines stay as arrays.
+  const LKEYS = ["p", "i", "d", "g", "o", "r", "b"];
+  const toStoreRec = r => ({ d: r.d, v: r.v, l: (r.l || []).map(a => Object.fromEntries(LKEYS.map((k, j) => [k, a[j]]))) });
+  const fromStoreRec = r => ({ d: r.d, v: r.v, l: (r.l || []).map(x => Array.isArray(x) ? x : LKEYS.map(k => x[k])) });
+  const mapPos = (pos, fn) => { const out = {}; for (const [k, v] of Object.entries(pos || {})) out[k] = fn(v); return out; };
+  const toStorePos = pos => mapPos(pos, toStoreRec);
+  const fromStorePos = pos => mapPos(pos, fromStoreRec);
+
+  return { ALIASES, DEFAULT_MAP, normPO, toISO, monthOf, rowsToIncoming, planImport, buildMonthWrites, toStorePos, fromStorePos };
 });

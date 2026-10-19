@@ -572,7 +572,7 @@ function writeNote(po, patch) {
 function writeErr(e) {
   if (e?.code === "permission-denied") return "Your account isn't on the board's access list. Ask the board admin to add your email.";
   if (e?.code === "resource-exhausted") return "The board's storage is full. Old received POs need clearing out.";
-  return "Couldn't save. Check your connection and try again.";
+  return `Couldn't save${e?.code ? " (" + e.code + ")" : ""}. Check your connection and try again; if it keeps happening, send this message to whoever set up the board.`;
 }
 
 // ---------- import ----------
@@ -615,7 +615,7 @@ async function applyImport() {
   showImportModal("Importing…");
   try {
     const next = ImportCore.buildMonthWrites(incoming, plan, S.months);
-    for (const [mid, pos] of next) await S.db.doc("po_months/" + mid).set({ pos, updatedAt: new Date().toISOString() });
+    for (const [mid, pos] of next) await S.db.doc("po_months/" + mid).set({ pos: ImportCore.toStorePos(pos), updatedAt: new Date().toISOString() });
     await S.db.doc("settings/lastImport").set({ at: new Date().toISOString(), file, rows, pos: incoming.size, added: plan.added, changed: plan.changed, by: S.uid || null, byName: S.email || null, source: "web" });
     $("#modal").hidden = true; pending = null;
     toast(`Imported: ${plan.added} new, ${plan.changed} updated`);
@@ -687,7 +687,7 @@ function lostAccess(e) {
 function startData() {
   const db = S.db;
   unsubs = [
-    db.collection("po_months").onSnapshot(snap => { S.months = new Map(snap.docs.map(d => [d.id, d.data()])); S.loaded.months = true; render(); }, lostAccess),
+    db.collection("po_months").onSnapshot(snap => { S.months = new Map(snap.docs.map(d => { const x = d.data(); return [d.id, { ...x, pos: ImportCore.fromStorePos(x.pos) }]; })); S.loaded.months = true; render(); }, lostAccess),
     db.collection("notes").onSnapshot(snap => { S.notes = new Map(snap.docs.map(d => [d.id, d.data()])); render(); }, lostAccess),
     db.collection("vendors").onSnapshot(snap => { S.vendors = new Map(snap.docs.map(d => { const v = d.data(); return [v.no || d.id, v]; })); render(); }, lostAccess),
     db.doc("settings/board").onSnapshot(d => { S.cfg = { ...DEFAULT_CFG, ...(d.exists ? d.data() : {}) }; render(); }, lostAccess),

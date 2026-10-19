@@ -105,7 +105,7 @@ async function main() {
   if (args.vendors && !args.dryRun) await importVendors(db, args.vendors);
 
   const [monthSnap, vendorSnap] = await Promise.all([db.collection("po_months").get(), db.collection("vendors").get()]);
-  const months = new Map(monthSnap.docs.map(d => [d.id, d.data()]));
+  const months = new Map(monthSnap.docs.map(d => { const x = d.data(); return [d.id, { ...x, pos: ImportCore.fromStorePos(x.pos) }]; }));
   const vendors = new Map(vendorSnap.docs.map(d => { const v = d.data(); return [v.no || d.id, v]; }));
 
   const plan = ImportCore.planImport(incoming, months, vendors);
@@ -117,7 +117,7 @@ async function main() {
   const next = ImportCore.buildMonthWrites(incoming, plan, months);
   const now = new Date().toISOString();
   const batch = db.batch();
-  for (const [mid, pos] of next) batch.set(db.doc(`po_months/${mid}`), { pos, updatedAt: now });
+  for (const [mid, pos] of next) batch.set(db.doc(`po_months/${mid}`), { pos: ImportCore.toStorePos(pos), updatedAt: now });
   batch.set(db.doc("settings/lastImport"), {
     at: now, file: path.basename(args.file), rows, pos: incoming.size,
     added: plan.added, changed: plan.changed, by: null, byName: "Auto-import", source: "auto",
