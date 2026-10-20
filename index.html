@@ -205,6 +205,7 @@ td.short { color: var(--late); font-weight: 600; }
       <button data-f="open" aria-pressed="true">Open</button>
       <button data-f="sent">Not received</button>
       <button data-f="partial">Partial</button>
+      <button data-f="eta">With ETA</button>
       <button data-f="done">Received</button>
       <button data-f="all">All</button>
     </div>
@@ -330,6 +331,7 @@ function matches(p) {
   if (f === "sent" && p.status !== "sent") return false;
   if (f === "partial" && p.status !== "partial") return false;
   if (f === "done" && p.open) return false;
+  if (f === "eta" && !p.note.eta) return false;
   if (S.starOnly && !p.note.star) return false;
   if (S.q) {
     const hay = [p.po, vendorName(p.vendor), p.note.note, ...p.titles, ...p.lines.map(l => l[0] + " " + l[1])].join(" ").toLowerCase();
@@ -383,8 +385,8 @@ function renderBoard(pos) {
   let anyShown = false;
   for (const v of vendorsList) {
     const all = byV.get(v);
-    const shown = all.filter(matches).sort((a, b) => (a.open && b.open) ? (b.age - a.age || a.po.localeCompare(b.po)) : (b.date.localeCompare(a.date) || b.po.localeCompare(a.po)));
-    if (S.q && !shown.length) continue;
+    const shown = all.filter(matches).sort((a, b) => S.filter === "eta" ? ((a.note.eta || "").localeCompare(b.note.eta || "") || a.po.localeCompare(b.po)) : (a.open && b.open) ? (b.age - a.age || a.po.localeCompare(b.po)) : (b.date.localeCompare(a.date) || b.po.localeCompare(a.po)));
+    if ((S.q || S.filter === "eta") && !shown.length) continue;
     anyShown = anyShown || shown.length > 0;
     const open = all.filter(p => p.open);
     const late = open.filter(p => p.age >= S.cfg.lateDays).length;
@@ -394,7 +396,7 @@ function renderBoard(pos) {
     html += `<section class="lane" data-collapsed="${collapsed}">
       <button class="lane-head" data-act="lane" data-v="${esc(v)}" aria-expanded="${!collapsed}">
         <span class="caret">▾</span>
-        <h2>${esc(vendorName(v))}</h2><span class="vno">${esc(v)}</span>
+        <h2>${esc(vendorName(v))}</h2>${S.vendors.get(v)?.name ? `<span class="vno">${esc(v)}</span>` : ""}
         <span class="counts">
           <span class="pill sent">${open.length} open</span>
           ${part ? `<span class="pill partial">${part} partial</span>` : ""}
@@ -405,7 +407,8 @@ function renderBoard(pos) {
         : `<div class="lane-empty">No POs match this filter.</div>`}
     </section>`;
   }
-  if (!anyShown && S.q) html = `<div class="empty"><h2>No matches</h2><p>Nothing matches “${esc(S.q)}” under this filter. Try All, or check the PO number.</p></div>` + html;
+  if (!anyShown && !S.q && S.filter === "eta") html = `<div class="empty"><h2>No ETAs yet</h2><p>Open a PO and pick a date under ETA. Orders with an ETA show here, soonest first.</p></div>`;
+  else if (!anyShown && S.q) html = `<div class="empty"><h2>No matches</h2><p>Nothing matches “${esc(S.q)}” under this filter. Try All, or check the PO number.</p></div>` + html;
   board.innerHTML = html;
 }
 function card(p) {
