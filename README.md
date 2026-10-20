@@ -105,6 +105,7 @@ Each run adds new POs and updates changed ones. It never deletes anything and ne
 ## How it behaves
 
 - **PO numbers:** all-digit PO numbers lose their leading zeros (`0002075` becomes `2075`) in both import paths, so notes always stay on the right card.
+- **Sheets:** every sheet in the export is read, e.g. **Tees POs** and **Other POs**. Columns are matched by header name, so the sheets can differ: Other POs has **ShipToName** (shown on the card and searchable) and no Print column, and uses **QuantityOrderedRevised** for the ordered quantity.
 - **MAS order status (OrderStatus column):** new POs are added only when they're **A** (active). POs already on the board always take the latest quantities and status: **C** (completed) moves them to *Received*, **X** (cancelled) moves them to *Cancelled*. Completed or cancelled POs that were never on the board are skipped.
 - **Status of active POs:** worked out from Quantity Ordered vs Quantity Received: *Not received*, *Partial* or *Received*. **Close out short** on a card treats a partial PO as done without changing MAS.
 - **Aging:** cards turn amber and then red by days since the PO date. Change the thresholds in Settings (gear icon).

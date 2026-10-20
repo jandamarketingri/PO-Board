@@ -57,16 +57,20 @@ const plain = v => {
   return v;
 };
 
-async function readRows(file) {
-  if (/\.(csv|txt)$/i.test(file)) return parseCSV(fs.readFileSync(file, "utf8"));
+// Every sheet in the file, as [{ name, rows }]. A CSV is one sheet.
+async function readSheets(file) {
+  if (/\.(csv|txt)$/i.test(file)) return [{ name: path.basename(file), rows: parseCSV(fs.readFileSync(file, "utf8")) }];
   if (/\.xls$/i.test(file)) throw new Error("Old .xls files aren't supported by the auto-import. Export as .xlsx or .csv.");
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.readFile(file);
-  const ws = wb.worksheets[0];
-  const rows = [];
-  ws.eachRow({ includeEmpty: true }, (r, n) => { rows[n - 1] = (r.values || []).slice(1).map(plain); });
-  return rows;
+  return wb.worksheets.map(ws => {
+    const rows = [];
+    ws.eachRow({ includeEmpty: true }, (r, n) => { rows[n - 1] = (r.values || []).slice(1).map(plain); });
+    return { name: ws.name, rows };
+  });
 }
+// First sheet only (used for the vendor list).
+async function readRows(file) { return (await readSheets(file))[0].rows; }
 
 function initFirebase(keyPath) {
   const key = keyPath || process.env.GOOGLE_APPLICATION_CREDENTIALS || path.join(__dirname, "service-account.json");
@@ -98,8 +102,8 @@ async function main() {
   if (!args.file) { console.error('Usage: node import.js <export.xlsx|.csv> [--dry-run] [--vendors vendors.xlsx] [--key service-account.json]'); process.exit(2); }
   if (!fs.existsSync(args.file)) throw new Error(`File not found: ${args.file}`);
 
-  const { incoming, rows } = ImportCore.rowsToIncoming(await readRows(args.file));
-  console.log(`Read ${rows} lines on ${incoming.size} POs from ${path.basename(args.file)}.`);
+  const { incoming, rows, sheets } = ImportCore.sheetsToIncoming(await readSheets(args.file));
+  console.log(`Read ${rows} lines on ${incoming.size} POs from ${path.basename(args.file)} (sheets: ${sheets.join(", ")}).`);
 
   const db = initFirebase(args.key);
   if (args.vendors && !args.dryRun) await importVendors(db, args.vendors);
@@ -129,4 +133,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch(err => { console.error("Import failed:", err.message || err); process.exit(1); });
-module.exports = { readRows, parseCSV };
+module.exports = { readRows, readSheets, parseCSV };

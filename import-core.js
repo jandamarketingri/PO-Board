@@ -19,14 +19,15 @@
     vendor: ["vendorno", "vendor", "vendornumber"],
     print: ["print", "printcode"],
     item: ["itemcode", "item", "finishedgood"],
-    desc: ["description", "itemdescription"],
+    desc: ["description", "itemdescription", "itemcodedesc"],
     line: ["productline"],
-    ord: ["quantityordered", "qtyordered"],
+    ord: ["quantityorderedrevised", "quantityordered", "qtyordered"],
     rec: ["quantityreceived", "quantityshipped", "qtyreceived", "qtyshipped"],
     bo: ["quantitybackordered", "qtybackordered"],
+    shipto: ["shiptoname", "shipto"],
   };
   // Column positions used when the file has no header row (A..K).
-  const DEFAULT_MAP = { po: 0, date: 1, status: 2, vendor: 3, print: 4, item: 5, desc: 6, line: 7, ord: 8, rec: 9, bo: 10 };
+  const DEFAULT_MAP = { po: 0, date: 1, status: 2, vendor: 3, print: 4, item: 5, desc: 6, line: 7, ord: 8, rec: 9, bo: 10, shipto: -1 };
 
   // MAS order status: A = active, C = completed (received and invoiced), X = cancelled.
   // A file without an OrderStatus column is treated as all active.
@@ -68,25 +69,51 @@
     const h = rows.findIndex(r => Array.isArray(r) && r.some(c => ALIASES.po.includes(norm(cellText(c)))));
     if (h >= 0) {
       const hdr = rows[h].map(c => norm(cellText(c)));
-      for (const [k, names] of Object.entries(ALIASES)) { const i = hdr.findIndex(x => names.includes(x)); if (i >= 0) map[k] = i; else if (k === "status") hasStatus = false; }
+      // With a header row, only columns found by name are used (a sheet without "Print" leaves print codes blank).
+      // Aliases are tried in order, so QuantityOrderedRevised wins over QuantityOrdered when both exist.
+      for (const [k, names] of Object.entries(ALIASES)) {
+        let i = -1; for (const n of names) { i = hdr.indexOf(n); if (i >= 0) break; }
+        map[k] = i; if (i < 0 && k === "status") hasStatus = false;
+      }
       start = h + 1;
     }
     const incoming = new Map(); let n = 0;
     const str = v => String(cellText(v) ?? "").trim();
+    if (map.po < 0) throw new Error("No PO number column found. The header row needs a column like PurchaseOrderNo.");
     for (let i = start; i < rows.length; i++) {
       const r = rows[i]; if (!r) continue;
       const po = normPO(r[map.po]); if (!po) continue;
       n++;
       let rec = incoming.get(po);
-      if (!rec) { rec = { d: toISO(r[map.date]), v: str(r[map.vendor]), s: hasStatus ? normStatus(r[map.status]) : "A", l: [] }; incoming.set(po, rec); }
+      if (!rec) {
+        rec = { d: toISO(r[map.date]), v: str(r[map.vendor]), s: hasStatus ? normStatus(r[map.status]) : "A", l: [] };
+        const t = map.shipto >= 0 ? str(r[map.shipto]) : ""; if (t) rec.t = t;
+        incoming.set(po, rec);
+      }
       rec.l.push([str(r[map.print]), str(r[map.item]), str(r[map.desc]), str(r[map.line]), num(cellText(r[map.ord])), num(cellText(r[map.rec])), num(cellText(r[map.bo]))]);
     }
     if (!incoming.size) throw new Error("No PO rows found. The first column should be the PO number, with a header row like PurchaseOrderNo.");
     return { incoming, rows: n };
   }
 
+  // Several sheets in one file (e.g. "Tees POs" and "Other POs"): sheets is [{ name, rows }].
+  // Sheets with no PO rows are ignored. Returns { incoming, rows, sheets: [names used] }.
+  function sheetsToIncoming(sheets) {
+    const incoming = new Map(); let n = 0; const used = []; let lastErr = null;
+    for (const sh of sheets) {
+      let res; try { res = rowsToIncoming(sh.rows || []); } catch (e) { lastErr = e; continue; }
+      used.push(sh.name); n += res.rows;
+      for (const [po, r] of res.incoming) {
+        const cur = incoming.get(po);
+        if (cur) { cur.l.push(...r.l); if (!cur.t && r.t) cur.t = r.t; } else incoming.set(po, r);
+      }
+    }
+    if (!incoming.size) throw lastErr || new Error("No PO rows found in this file.");
+    return { incoming, rows: n, sheets: used };
+  }
+
   // Field-by-field compare (stored documents can come back with keys in a different order).
-  const samePO = (a, b) => !!a && a.d === b.d && a.v === b.v && (a.s || "A") === (b.s || "A") && JSON.stringify(a.l) === JSON.stringify(b.l);
+  const samePO = (a, b) => !!a && a.d === b.d && a.v === b.v && (a.s || "A") === (b.s || "A") && (a.t || "") === (b.t || "") && JSON.stringify(a.l) === JSON.stringify(b.l);
 
   // months: Map(monthId -> { pos }) of what's stored now. vendors: Map(vendorNo -> {name}).
   function planImport(incoming, months, vendors) {
@@ -124,11 +151,11 @@
   // { p: print, i: item, d: description, g: product line, o: ordered, r: received, b: backordered }.
   // In memory (and in the page) lines stay as arrays.
   const LKEYS = ["p", "i", "d", "g", "o", "r", "b"];
-  const toStoreRec = r => ({ d: r.d, v: r.v, s: r.s || "A", l: (r.l || []).map(a => Object.fromEntries(LKEYS.map((k, j) => [k, a[j]]))) });
-  const fromStoreRec = r => ({ d: r.d, v: r.v, s: r.s || "A", l: (r.l || []).map(x => Array.isArray(x) ? x : LKEYS.map(k => x[k])) });
+  const toStoreRec = r => ({ d: r.d, v: r.v, s: r.s || "A", ...(r.t ? { t: r.t } : {}), l: (r.l || []).map(a => Object.fromEntries(LKEYS.map((k, j) => [k, a[j]]))) });
+  const fromStoreRec = r => ({ d: r.d, v: r.v, s: r.s || "A", ...(r.t ? { t: r.t } : {}), l: (r.l || []).map(x => Array.isArray(x) ? x : LKEYS.map(k => x[k])) });
   const mapPos = (pos, fn) => { const out = {}; for (const [k, v] of Object.entries(pos || {})) out[k] = fn(v); return out; };
   const toStorePos = pos => mapPos(pos, toStoreRec);
   const fromStorePos = pos => mapPos(pos, fromStoreRec);
 
-  return { ALIASES, DEFAULT_MAP, normPO, toISO, monthOf, rowsToIncoming, planImport, buildMonthWrites, toStorePos, fromStorePos };
+  return { ALIASES, DEFAULT_MAP, normPO, toISO, monthOf, rowsToIncoming, sheetsToIncoming, planImport, buildMonthWrites, toStorePos, fromStorePos };
 });
