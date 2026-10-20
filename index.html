@@ -399,7 +399,6 @@ function renderBoard(pos) {
           <span class="pill sent">${open.length} open</span>
           ${part ? `<span class="pill partial">${part} partial</span>` : ""}
           ${late ? `<span class="pill late">${late} late</span>` : ""}
-          ${!S.vendors.get(v)?.name ? `<span class="pill warn">Unnamed vendor</span>` : ""}
         </span>
       </button>
       ${shown.length ? `<div class="cards">${shown.slice(0, cap).map(card).join("")}</div>${shown.length > cap ? `<div class="lane-empty">Showing the ${cap} most recent of ${shown.length}. Search to find older POs.</div>` : ""}`
