@@ -105,11 +105,12 @@ Each run adds new POs and updates changed ones. It never deletes anything and ne
 ## How it behaves
 
 - **PO numbers:** all-digit PO numbers lose their leading zeros (`0002075` becomes `2075`) in both import paths, so notes always stay on the right card.
-- **Status:** worked out from Quantity Ordered vs Quantity Received: *Not received*, *Partial* or *Received*. **Close out short** on a card treats a partial PO as done without changing MAS.
+- **MAS order status (OrderStatus column):** new POs are added only when they're **A** (active). POs already on the board always take the latest quantities and status: **C** (completed) moves them to *Received*, **X** (cancelled) moves them to *Cancelled*. Completed or cancelled POs that were never on the board are skipped.
+- **Status of active POs:** worked out from Quantity Ordered vs Quantity Received: *Not received*, *Partial* or *Received*. **Close out short** on a card treats a partial PO as done without changing MAS.
 - **Aging:** cards turn amber and then red by days since the PO date. Change the thresholds in Settings (gear icon).
 - **ETA:** set on a card's detail panel. It turns red once the date passes while the PO is still open.
 - **Vendors and steps:** rename vendors, reorder or hide rows, and edit the tracking steps (Art, Seps, Samples, RFIDs, UPCs) in Settings.
 
 ## Changing the MAS export
 
-The import matches columns by header name. If the query changes, add the new header spelling to `ALIASES` in `import-core.js`. With no header row, it falls back to columns A–J in this order: PO number, PO date, vendor no., print code, item code, description, product line, qty ordered, qty received, qty backordered.
+The import matches columns by header name. If the query changes, add the new header spelling to `ALIASES` in `import-core.js`. With no header row, it falls back to columns A–K in this order: PO number, PO date, order status, vendor no., print code, item code, description, product line, qty ordered, qty received, qty backordered.

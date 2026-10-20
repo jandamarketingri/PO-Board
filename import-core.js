@@ -15,6 +15,7 @@
   const ALIASES = {
     po: ["purchaseorderno", "pono", "purchaseorder", "po"],
     date: ["purchaseorderdate", "podate", "orderdate", "date"],
+    status: ["orderstatus", "status", "postatus"],
     vendor: ["vendorno", "vendor", "vendornumber"],
     print: ["print", "printcode"],
     item: ["itemcode", "item", "finishedgood"],
@@ -24,8 +25,12 @@
     rec: ["quantityreceived", "quantityshipped", "qtyreceived", "qtyshipped"],
     bo: ["quantitybackordered", "qtybackordered"],
   };
-  // Column positions used when the file has no header row (A..J).
-  const DEFAULT_MAP = { po: 0, date: 1, vendor: 2, print: 3, item: 4, desc: 5, line: 6, ord: 7, rec: 8, bo: 9 };
+  // Column positions used when the file has no header row (A..K).
+  const DEFAULT_MAP = { po: 0, date: 1, status: 2, vendor: 3, print: 4, item: 5, desc: 6, line: 7, ord: 8, rec: 9, bo: 10 };
+
+  // MAS order status: A = active, C = completed (received and invoiced), X = cancelled.
+  // A file without an OrderStatus column is treated as all active.
+  const normStatus = v => { const s = String(cellText(v) ?? "").trim().toUpperCase().charAt(0); return s === "C" || s === "X" ? s : "A"; };
 
   const norm = v => String(v ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
   const num = v => { const n = Number(String(v ?? "").replace(/,/g, "")); return isFinite(n) ? n : 0; };
@@ -59,11 +64,11 @@
 
   // rows: array of arrays (first sheet). Returns { incoming: Map(po -> record), rows: lineCount }.
   function rowsToIncoming(rows) {
-    const map = { ...DEFAULT_MAP }; let start = 0;
+    const map = { ...DEFAULT_MAP }; let start = 0; let hasStatus = true;
     const h = rows.findIndex(r => Array.isArray(r) && r.some(c => ALIASES.po.includes(norm(cellText(c)))));
     if (h >= 0) {
       const hdr = rows[h].map(c => norm(cellText(c)));
-      for (const [k, names] of Object.entries(ALIASES)) { const i = hdr.findIndex(x => names.includes(x)); if (i >= 0) map[k] = i; }
+      for (const [k, names] of Object.entries(ALIASES)) { const i = hdr.findIndex(x => names.includes(x)); if (i >= 0) map[k] = i; else if (k === "status") hasStatus = false; }
       start = h + 1;
     }
     const incoming = new Map(); let n = 0;
@@ -73,7 +78,7 @@
       const po = normPO(r[map.po]); if (!po) continue;
       n++;
       let rec = incoming.get(po);
-      if (!rec) { rec = { d: toISO(r[map.date]), v: str(r[map.vendor]), l: [] }; incoming.set(po, rec); }
+      if (!rec) { rec = { d: toISO(r[map.date]), v: str(r[map.vendor]), s: hasStatus ? normStatus(r[map.status]) : "A", l: [] }; incoming.set(po, rec); }
       rec.l.push([str(r[map.print]), str(r[map.item]), str(r[map.desc]), str(r[map.line]), num(cellText(r[map.ord])), num(cellText(r[map.rec])), num(cellText(r[map.bo]))]);
     }
     if (!incoming.size) throw new Error("No PO rows found. The first column should be the PO number, with a header row like PurchaseOrderNo.");
@@ -81,23 +86,29 @@
   }
 
   // Field-by-field compare (stored documents can come back with keys in a different order).
-  const samePO = (a, b) => !!a && a.d === b.d && a.v === b.v && JSON.stringify(a.l) === JSON.stringify(b.l);
+  const samePO = (a, b) => !!a && a.d === b.d && a.v === b.v && (a.s || "A") === (b.s || "A") && JSON.stringify(a.l) === JSON.stringify(b.l);
 
   // months: Map(monthId -> { pos }) of what's stored now. vendors: Map(vendorNo -> {name}).
   function planImport(incoming, months, vendors) {
     const where = new Map();
     for (const [mid, m] of months) for (const po of Object.keys((m && m.pos) || {})) where.set(po, mid);
-    let added = 0, changed = 0, same = 0; const touched = new Set(); const moved = [];
+    let added = 0, changed = 0, same = 0, toCompleted = 0, toCancelled = 0;
+    const touched = new Set(); const moved = []; const skip = new Set();
     for (const [po, r] of incoming) {
       const mid = monthOf(r.d);
       const curM = where.get(po);
-      if (!curM) { added++; touched.add(mid); continue; }
-      if (samePO(months.get(curM).pos[po], r)) { same++; continue; }
+      // Rule: only ACTIVE orders are added as new cards. Completed/cancelled ones not already on the board are skipped.
+      if (!curM) { if (r.s !== "A") { skip.add(po); continue; } added++; touched.add(mid); continue; }
+      const cur = months.get(curM).pos[po];
+      if (samePO(cur, r)) { same++; continue; }
+      // Orders already on the board always take the latest quantities and status.
+      if ((cur.s || "A") !== r.s) { if (r.s === "C") toCompleted++; else if (r.s === "X") toCancelled++; }
       changed++; touched.add(mid);
       if (curM !== mid) { moved.push([po, curM]); touched.add(curM); }
     }
     const newVendors = [...new Set([...incoming.values()].map(r => r.v))].filter(v => v && !(vendors && vendors.get(v) && vendors.get(v).name));
-    return { added, changed, same, touched, moved, newVendors };
+    const skippedCompleted = [...skip].filter(po => incoming.get(po).s === "C").length;
+    return { added, changed, same, touched, moved, newVendors, skip, skipped: skip.size, skippedCompleted, skippedCancelled: skip.size - skippedCompleted, toCompleted, toCancelled };
   }
 
   // Returns Map(monthId -> full pos object to write). POs missing from the export are kept.
@@ -105,7 +116,7 @@
     const next = new Map();
     const get = mid => { if (!next.has(mid)) next.set(mid, { ...((months.get(mid) && months.get(mid).pos) || {}) }); return next.get(mid); };
     for (const [po, from] of plan.moved) delete get(from)[po];
-    for (const [po, r] of incoming) { const mid = monthOf(r.d); if (plan.touched.has(mid)) get(mid)[po] = r; }
+    for (const [po, r] of incoming) { if (plan.skip && plan.skip.has(po)) continue; const mid = monthOf(r.d); if (plan.touched.has(mid)) get(mid)[po] = r; }
     return next;
   }
 
@@ -113,8 +124,8 @@
   // { p: print, i: item, d: description, g: product line, o: ordered, r: received, b: backordered }.
   // In memory (and in the page) lines stay as arrays.
   const LKEYS = ["p", "i", "d", "g", "o", "r", "b"];
-  const toStoreRec = r => ({ d: r.d, v: r.v, l: (r.l || []).map(a => Object.fromEntries(LKEYS.map((k, j) => [k, a[j]]))) });
-  const fromStoreRec = r => ({ d: r.d, v: r.v, l: (r.l || []).map(x => Array.isArray(x) ? x : LKEYS.map(k => x[k])) });
+  const toStoreRec = r => ({ d: r.d, v: r.v, s: r.s || "A", l: (r.l || []).map(a => Object.fromEntries(LKEYS.map((k, j) => [k, a[j]]))) });
+  const fromStoreRec = r => ({ d: r.d, v: r.v, s: r.s || "A", l: (r.l || []).map(x => Array.isArray(x) ? x : LKEYS.map(k => x[k])) });
   const mapPos = (pos, fn) => { const out = {}; for (const [k, v] of Object.entries(pos || {})) out[k] = fn(v); return out; };
   const toStorePos = pos => mapPos(pos, toStoreRec);
   const fromStorePos = pos => mapPos(pos, fromStoreRec);

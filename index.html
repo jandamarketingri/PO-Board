@@ -207,6 +207,7 @@ td.short { color: var(--late); font-weight: 600; }
       <button data-f="partial">Partial</button>
       <button data-f="eta">With ETA</button>
       <button data-f="done">Received</button>
+      <button data-f="cancelled">Cancelled</button>
       <button data-f="all">All</button>
     </div>
     <label class="chk"><input type="checkbox" id="starOnly"> Starred</label>
@@ -252,7 +253,7 @@ td.short { color: var(--late); font-weight: 600; }
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="firebase-config.js?v=3"></script>
-<script src="import-core.js?v=3"></script>
+<script src="import-core.js?v=4"></script>
 <script>
 (() => {
 const $ = (s, r = document) => r.querySelector(s);
@@ -312,8 +313,9 @@ function derive(po, r) {
     g.ord += +o || 0; g.rec += +rc || 0; g.sizes.push({ size: size || "—", ord: +o || 0, rec: +rc || 0 });
   }
   for (const g of groups.values()) g.sizes.sort((a, b) => SIZE_ORDER.indexOf(a.size) - SIZE_ORDER.indexOf(b.size));
-  let status = rec === 0 ? "sent" : rec < ord ? "partial" : "received";
-  if (n.closed && status !== "received") status = "closed";
+  // MAS status wins: C = completed (received), X = cancelled. Active orders use the quantities.
+  let status = r.s === "X" ? "cancelled" : r.s === "C" ? "received" : rec === 0 ? "sent" : rec < ord ? "partial" : "received";
+  if (n.closed && (status === "sent" || status === "partial")) status = "closed";
   const designs = [...groups.values()];
   const titles = [...new Set(designs.map(g => g.desc))];
   return { po, id: docId(po), date: r.d, vendor: r.v, ord, rec, bo, status, open: status === "sent" || status === "partial",
@@ -330,8 +332,9 @@ function matches(p) {
   if (f === "open" && !p.open) return false;
   if (f === "sent" && p.status !== "sent") return false;
   if (f === "partial" && p.status !== "partial") return false;
-  if (f === "done" && p.open) return false;
-  if (f === "eta" && !p.note.eta) return false;
+  if (f === "done" && !(p.status === "received" || p.status === "closed")) return false;
+  if (f === "cancelled" && p.status !== "cancelled") return false;
+  if (f === "eta" && !(p.note.eta && p.open)) return false;
   if (S.starOnly && !p.note.star) return false;
   if (S.q) {
     const hay = [p.po, vendorName(p.vendor), p.note.note, ...p.titles, ...p.lines.map(l => l[0] + " " + l[1])].join(" ").toLowerCase();
@@ -386,7 +389,7 @@ function renderBoard(pos) {
   for (const v of vendorsList) {
     const all = byV.get(v);
     const shown = all.filter(matches).sort((a, b) => S.filter === "eta" ? ((a.note.eta || "").localeCompare(b.note.eta || "") || a.po.localeCompare(b.po)) : (a.open && b.open) ? (b.age - a.age || a.po.localeCompare(b.po)) : (b.date.localeCompare(a.date) || b.po.localeCompare(a.po)));
-    if ((S.q || S.filter === "eta") && !shown.length) continue;
+    if ((S.q || S.filter === "eta" || S.filter === "cancelled") && !shown.length) continue;
     anyShown = anyShown || shown.length > 0;
     const open = all.filter(p => p.open);
     const late = open.filter(p => p.age >= S.cfg.lateDays).length;
@@ -407,7 +410,8 @@ function renderBoard(pos) {
         : `<div class="lane-empty">No POs match this filter.</div>`}
     </section>`;
   }
-  if (!anyShown && !S.q && S.filter === "eta") html = `<div class="empty"><h2>No ETAs yet</h2><p>Open a PO and pick a date under ETA. Orders with an ETA show here, soonest first.</p></div>`;
+  if (!anyShown && !S.q && S.filter === "cancelled") html = `<div class="empty"><h2>No cancelled orders</h2><p>Orders that were on the board and later come through the MAS export as cancelled (X) show here.</p></div>`;
+  else if (!anyShown && !S.q && S.filter === "eta") html = `<div class="empty"><h2>No ETAs yet</h2><p>Open a PO and pick a date under ETA. Orders with an ETA show here, soonest first.</p></div>`;
   else if (!anyShown && S.q) html = `<div class="empty"><h2>No matches</h2><p>Nothing matches “${esc(S.q)}” under this filter. Try All, or check the PO number.</p></div>` + html;
   board.innerHTML = html;
 }
@@ -415,7 +419,7 @@ function card(p) {
   const pct = p.ord ? Math.min(100, Math.round(p.rec / p.ord * 100)) : 0;
   const ac = ageClass(p);
   const stages = (p.note.stages || []).filter(s => S.cfg.stages.includes(s));
-  const statusTxt = p.status === "received" ? "Received" : p.status === "closed" ? "Closed" : `${p.age}d ago`;
+  const statusTxt = p.status === "received" ? "Received" : p.status === "closed" ? "Closed" : p.status === "cancelled" ? "Cancelled" : `${p.age}d ago`;
   const eta = p.note.eta;
   const etaPast = eta && p.open && parseISO(eta) < today();
   return `<button class="card ${p.open ? "" : "done"}" data-act="open" data-po="${esc(p.po)}">
@@ -424,13 +428,17 @@ function card(p) {
     ${p.titles.length > 1 ? `<div class="c-more">+${p.titles.length - 1} more design${p.titles.length > 2 ? "s" : ""}</div>` : ""}
     <div class="meter ${pct >= 100 ? "full" : ""}" title="${p.rec} of ${p.ord} received"><i style="width:${pct}%"></i></div>
     <div class="c-foot"><span>Sent ${fmtShort(p.date)}</span><span class="age ${ac}">${statusTxt}</span><span class="qty">${p.rec}/${p.ord}</span></div>
-    ${eta && p.status !== "received" ? `<div class="c-eta ${etaPast ? "past" : ""}" title="${etaPast ? "ETA has passed" : "Expected arrival"}">ETA ${fmtShort(eta)}${etaPast ? " · passed" : ""}</div>` : ""}
+    ${eta && p.open ? `<div class="c-eta ${etaPast ? "past" : ""}" title="${etaPast ? "ETA has passed" : "Expected arrival"}">ETA ${fmtShort(eta)}${etaPast ? " · passed" : ""}</div>` : ""}
     ${stages.length ? `<div class="c-stages">${stages.map(s => `<span class="tag">${esc(s)}</span>`).join("")}</div>` : ""}
     ${p.note.note ? `<div class="c-note">${esc(p.note.note)}</div>` : ""}
   </button>`;
 }
 
 // ---------- drawer: PO ----------
+function findRaw(po) {
+  for (const [, m] of S.months) if (m.pos && Object.prototype.hasOwnProperty.call(m.pos, po)) return m.pos[po];
+  return null;
+}
 function findPO(po) {
   for (const [, m] of S.months) if (m.pos && Object.prototype.hasOwnProperty.call(m.pos, po)) return derive(po, m.pos[po]);
   return null;
@@ -443,7 +451,8 @@ async function renderDrawerPO() {
   const p = findPO(S.openId);
   if (!p) { closeDrawer(); return; }
   const statusPill = { sent: `<span class="pill sent">Nothing received</span>`, partial: `<span class="pill partial">Partial · ${p.rec}/${p.ord}</span>`,
-    received: `<span class="pill received">Received</span>`, closed: `<span class="pill closed">Closed short</span>` }[p.status];
+    received: `<span class="pill received">${p.lines.length && findRaw(p.po)?.s === "C" ? "Completed in MAS" : "Received"}</span>`, closed: `<span class="pill closed">Closed short</span>`,
+    cancelled: `<span class="pill late">Cancelled in MAS</span>` }[p.status];
   const ac = ageClass(p);
   const ro = !S.canWrite;
   let edited = "";
@@ -479,7 +488,7 @@ async function renderDrawerPO() {
         <textarea id="noteText" placeholder="${ro ? "No notes" : "Add a note for the team (who to follow up with, ship date promised…)"}" ${ro ? "readonly" : ""}>${esc(p.note.note || "")}</textarea>
         <div class="row" style="margin-top:8px">
           ${ro ? "" : `<button class="btn" data-act="saveNote">Save note</button>`}
-          ${ro || p.status === "received" ? "" : `<button class="btn" data-act="closePO">${p.note.closed ? "Reopen PO" : "Close out short"}</button>`}
+          ${ro || p.status === "received" || p.status === "cancelled" ? "" : `<button class="btn" data-act="closePO">${p.note.closed ? "Reopen PO" : "Close out short"}</button>`}
           <span class="hint">${edited}</span>
         </div>
         ${!ro && p.status === "partial" ? `<p class="hint" style="margin:8px 0 0">Close out short when the rest of this PO won't ship. It moves to Received without changing MAS.</p>` : ""}
@@ -607,7 +616,9 @@ function showImportModal(busy = "") {
   m.innerHTML = `<div class="modal-card" role="dialog" aria-modal="true">
     <h2>Import ${esc(file)}</h2>
     <p class="hint" style="margin:0">${rows} lines on ${incoming.size} POs. Notes, stars and steps already on the board are kept.</p>
-    <div class="stats"><div><b>${plan.added}</b><span>new POs</span></div><div><b>${plan.changed}</b><span>updated</span></div><div><b>${plan.same}</b><span>unchanged</span></div></div>
+    <div class="stats"><div><b>${plan.added}</b><span>new active POs</span></div><div><b>${plan.changed}</b><span>updated</span></div><div><b>${plan.same}</b><span>unchanged</span></div></div>
+    ${plan.toCompleted || plan.toCancelled ? `<p class="hint" style="margin:0">Of the updates, ${plan.toCompleted} will move to Received (completed in MAS)${plan.toCancelled ? ` and ${plan.toCancelled} to Cancelled` : ""}.</p>` : ""}
+    ${plan.skipped ? `<p class="hint" style="margin:0">Skipped ${plan.skipped} PO${plan.skipped === 1 ? "" : "s"} that ${plan.skipped === 1 ? "isn't" : "aren't"} on the board and ${plan.skipped === 1 ? "is" : "are"} already ${plan.skippedCancelled && plan.skippedCompleted ? "completed or cancelled" : plan.skippedCancelled ? "cancelled" : "completed"} in MAS.</p>` : ""}
     ${plan.newVendors.length ? `<p class="hint" style="margin:0">New vendor numbers: <span class="mono">${plan.newVendors.map(esc).join(", ")}</span>. Name them in Settings after importing.</p>` : ""}
     <div class="row" style="justify-content:flex-end">
       <button class="btn" data-act="cancelImport" ${busy ? "disabled" : ""}>Cancel</button>
@@ -620,7 +631,7 @@ async function applyImport() {
   try {
     const next = ImportCore.buildMonthWrites(incoming, plan, S.months);
     for (const [mid, pos] of next) await S.db.doc("po_months/" + mid).set({ pos: ImportCore.toStorePos(pos), updatedAt: new Date().toISOString() });
-    await S.db.doc("settings/lastImport").set({ at: new Date().toISOString(), file, rows, pos: incoming.size, added: plan.added, changed: plan.changed, by: S.uid || null, byName: S.email || null, source: "web" });
+    await S.db.doc("settings/lastImport").set({ at: new Date().toISOString(), file, rows, pos: incoming.size, added: plan.added, changed: plan.changed, skipped: plan.skipped, by: S.uid || null, byName: S.email || null, source: "web" });
     $("#modal").hidden = true; pending = null;
     toast(`Imported: ${plan.added} new, ${plan.changed} updated`);
   } catch (e) { $("#modal").hidden = true; pending = null; toast(writeErr(e)); }
@@ -700,7 +711,7 @@ function startData() {
 }
 function boot() {
   const cfg = window.FIREBASE_CONFIG;
-  if (window.ImportCore && !window.ImportCore.toStorePos) { S.setupMsg = `<div class="empty"><h2>Update loading</h2><p>An older copy of the board is cached. Reload the page in a minute (Ctrl + F5).</p></div>`; S.loaded.months = true; render(); return; }
+  if (window.ImportCore && !(window.ImportCore.toStorePos && window.ImportCore.ALIASES.status)) { S.setupMsg = `<div class="empty"><h2>Update loading</h2><p>An older copy of the board is cached. Reload the page in a minute (Ctrl + F5).</p></div>`; S.loaded.months = true; render(); return; }
   if (!window.firebase || !window.ImportCore || !cfg || !cfg.apiKey || /^PASTE/.test(cfg.apiKey)) {
     S.setupMsg = `<div class="empty"><h2>Not connected yet</h2><p>Paste your Firebase project settings into firebase-config.js. The README walks through it.</p></div>`;
     S.loaded.months = true; render(); return;

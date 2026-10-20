@@ -109,7 +109,9 @@ async function main() {
   const vendors = new Map(vendorSnap.docs.map(d => { const v = d.data(); return [v.no || d.id, v]; }));
 
   const plan = ImportCore.planImport(incoming, months, vendors);
-  console.log(`New POs: ${plan.added}   Updated: ${plan.changed}   Unchanged: ${plan.same}`);
+  console.log(`New active POs: ${plan.added}   Updated: ${plan.changed}   Unchanged: ${plan.same}`);
+  if (plan.toCompleted || plan.toCancelled) console.log(`  Moving to Received (completed in MAS): ${plan.toCompleted}   Moving to Cancelled: ${plan.toCancelled}`);
+  if (plan.skipped) console.log(`Skipped ${plan.skipped} completed/cancelled POs that aren't on the board (${plan.skippedCompleted} completed, ${plan.skippedCancelled} cancelled).`);
   if (plan.newVendors.length) console.log(`Vendor numbers with no name yet: ${plan.newVendors.join(", ")} (name them in Settings on the site)`);
   if (args.dryRun) { console.log("Dry run: nothing written."); return; }
   if (!plan.added && !plan.changed) { console.log("Board already up to date."); return; }
@@ -120,7 +122,7 @@ async function main() {
   for (const [mid, pos] of next) batch.set(db.doc(`po_months/${mid}`), { pos: ImportCore.toStorePos(pos), updatedAt: now });
   batch.set(db.doc("settings/lastImport"), {
     at: now, file: path.basename(args.file), rows, pos: incoming.size,
-    added: plan.added, changed: plan.changed, by: null, byName: "Auto-import", source: "auto",
+    added: plan.added, changed: plan.changed, skipped: plan.skipped, by: null, byName: "Auto-import", source: "auto",
   });
   await batch.commit();
   console.log(`Done. Wrote ${next.size} month${next.size === 1 ? "" : "s"} of POs.`);
