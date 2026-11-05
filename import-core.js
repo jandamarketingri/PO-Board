@@ -16,6 +16,7 @@
     po: ["purchaseorderno", "pono", "purchaseorder", "po"],
     date: ["purchaseorderdate", "podate", "orderdate", "date"],
     status: ["orderstatus", "status", "postatus"],
+    eta: ["requiredexpiredate", "requireddate", "eta"],
     vendor: ["vendorno", "vendor", "vendornumber"],
     print: ["print", "printcode"],
     item: ["itemcode", "item", "finishedgood"],
@@ -27,7 +28,7 @@
     shipto: ["shiptoname", "shipto"],
   };
   // Column positions used when the file has no header row (A..K).
-  const DEFAULT_MAP = { po: 0, date: 1, status: 2, vendor: 3, print: 4, item: 5, desc: 6, line: 7, ord: 8, rec: 9, bo: 10, shipto: -1 };
+  const DEFAULT_MAP = { po: 0, date: 1, eta: 2, status: 3, vendor: 4, print: 5, item: 6, desc: 7, line: 8, ord: 9, rec: 10, bo: 11, shipto: -1 };
 
   // MAS order status: A = active, C = completed (received and invoiced), X = cancelled.
   // A file without an OrderStatus column is treated as all active.
@@ -64,9 +65,10 @@
   const monthOf = iso => iso === "undated" ? "undated" : iso.slice(0, 7);
 
   // rows: array of arrays (first sheet). Returns { incoming: Map(po -> record), rows: lineCount }.
-  function rowsToIncoming(rows) {
+  function rowsToIncoming(rows, opts) {
     const map = { ...DEFAULT_MAP }; let start = 0; let hasStatus = true;
     const h = rows.findIndex(r => Array.isArray(r) && r.some(c => ALIASES.po.includes(norm(cellText(c)))));
+    if (h < 0 && opts && opts.requireHeader) throw new Error("No PO header row on this sheet.");
     if (h >= 0) {
       const hdr = rows[h].map(c => norm(cellText(c)));
       // With a header row, only columns found by name are used (a sheet without "Print" leaves print codes blank).
@@ -88,6 +90,9 @@
       if (!rec) {
         rec = { d: toISO(r[map.date]), v: str(r[map.vendor]), s: hasStatus ? normStatus(r[map.status]) : "A", l: [] };
         const t = map.shipto >= 0 ? str(r[map.shipto]) : ""; if (t) rec.t = t;
+        // ETA from MAS (RequiredExpireDate). Sage fills in the PO date when nobody sets one,
+        // so only a date LATER than the PO date counts as a real ETA.
+        if (map.eta >= 0) { const e = toISO(r[map.eta]); if (e !== "undated" && rec.d !== "undated" && e > rec.d) rec.e = e; }
         incoming.set(po, rec);
       }
       rec.l.push([str(r[map.print]), str(r[map.item]), str(r[map.desc]), str(r[map.line]), num(cellText(r[map.ord])), num(cellText(r[map.rec])), num(cellText(r[map.bo]))]);
@@ -101,7 +106,8 @@
   function sheetsToIncoming(sheets) {
     const incoming = new Map(); let n = 0; const used = []; let lastErr = null;
     for (const sh of sheets) {
-      let res; try { res = rowsToIncoming(sh.rows || []); } catch (e) { lastErr = e; continue; }
+      // In a file with several sheets, only sheets with a PO header row count (skips e.g. "Item Info").
+      let res; try { res = rowsToIncoming(sh.rows || [], { requireHeader: sheets.length > 1 }); } catch (e) { lastErr = e; continue; }
       used.push(sh.name); n += res.rows;
       for (const [po, r] of res.incoming) {
         const cur = incoming.get(po);
@@ -113,7 +119,7 @@
   }
 
   // Field-by-field compare (stored documents can come back with keys in a different order).
-  const samePO = (a, b) => !!a && a.d === b.d && a.v === b.v && (a.s || "A") === (b.s || "A") && (a.t || "") === (b.t || "") && JSON.stringify(a.l) === JSON.stringify(b.l);
+  const samePO = (a, b) => !!a && a.d === b.d && a.v === b.v && (a.s || "A") === (b.s || "A") && (a.t || "") === (b.t || "") && (a.e || "") === (b.e || "") && JSON.stringify(a.l) === JSON.stringify(b.l);
 
   // months: Map(monthId -> { pos }) of what's stored now. vendors: Map(vendorNo -> {name}).
   function planImport(incoming, months, vendors) {
@@ -151,8 +157,8 @@
   // { p: print, i: item, d: description, g: product line, o: ordered, r: received, b: backordered }.
   // In memory (and in the page) lines stay as arrays.
   const LKEYS = ["p", "i", "d", "g", "o", "r", "b"];
-  const toStoreRec = r => ({ d: r.d, v: r.v, s: r.s || "A", ...(r.t ? { t: r.t } : {}), l: (r.l || []).map(a => Object.fromEntries(LKEYS.map((k, j) => [k, a[j]]))) });
-  const fromStoreRec = r => ({ d: r.d, v: r.v, s: r.s || "A", ...(r.t ? { t: r.t } : {}), l: (r.l || []).map(x => Array.isArray(x) ? x : LKEYS.map(k => x[k])) });
+  const toStoreRec = r => ({ d: r.d, v: r.v, s: r.s || "A", ...(r.t ? { t: r.t } : {}), ...(r.e ? { e: r.e } : {}), l: (r.l || []).map(a => Object.fromEntries(LKEYS.map((k, j) => [k, a[j]]))) });
+  const fromStoreRec = r => ({ d: r.d, v: r.v, s: r.s || "A", ...(r.t ? { t: r.t } : {}), ...(r.e ? { e: r.e } : {}), l: (r.l || []).map(x => Array.isArray(x) ? x : LKEYS.map(k => x[k])) });
   const mapPos = (pos, fn) => { const out = {}; for (const [k, v] of Object.entries(pos || {})) out[k] = fn(v); return out; };
   const toStorePos = pos => mapPos(pos, toStoreRec);
   const fromStorePos = pos => mapPos(pos, fromStoreRec);

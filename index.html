@@ -254,7 +254,7 @@ td.short { color: var(--late); font-weight: 600; }
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="firebase-config.js?v=3"></script>
-<script src="import-core.js?v=5"></script>
+<script src="import-core.js?v=6"></script>
 <script>
 (() => {
 const $ = (s, r = document) => r.querySelector(s);
@@ -319,7 +319,9 @@ function derive(po, r) {
   if (n.closed && (status === "sent" || status === "partial")) status = "closed";
   const designs = [...groups.values()];
   const titles = [...new Set(designs.map(g => g.desc))];
-  return { po, id: docId(po), date: r.d, vendor: r.v, shipTo: r.t || "", ord, rec, bo, status, open: status === "sent" || status === "partial",
+  // ETA: one typed on the board always wins; otherwise the date from MAS (if any).
+  const eta = n.eta || r.e || "";
+  return { po, id: docId(po), date: r.d, vendor: r.v, shipTo: r.t || "", eta, etaMAS: r.e || "", etaSource: n.eta ? "board" : r.e ? "mas" : "", ord, rec, bo, status, open: status === "sent" || status === "partial",
     designs, titles, note: n, age: ageDays(r.d), lines: r.l || [] };
 }
 function ageClass(p) {
@@ -335,7 +337,7 @@ function matches(p) {
   if (f === "partial" && p.status !== "partial") return false;
   if (f === "done" && !(p.status === "received" || p.status === "closed")) return false;
   if (f === "cancelled" && p.status !== "cancelled") return false;
-  if (f === "eta" && !(p.note.eta && p.open)) return false;
+  if (f === "eta" && !(p.eta && p.open)) return false;
   if (S.starOnly && !p.note.star) return false;
   if (S.q) {
     const hay = [p.po, vendorName(p.vendor), p.shipTo, p.note.note, ...p.titles, ...p.lines.map(l => l[0] + " " + l[1])].join(" ").toLowerCase();
@@ -356,7 +358,7 @@ function renderSummary(pos) {
   const sent = open.filter(p => p.status === "sent").length;
   const part = open.filter(p => p.status === "partial").length;
   const late = open.filter(p => p.age >= S.cfg.lateDays).length;
-  const etaPast = open.filter(p => p.note.eta && parseISO(p.note.eta) < today()).length;
+  const etaPast = open.filter(p => p.eta && parseISO(p.eta) < today()).length;
   const li = S.lastImport;
   const liTxt = li?.at ? `Last import ${new Date(li.at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}${li.file ? " · " + esc(li.file) : ""}` : "";
   $("#summary").innerHTML = pos.length ? `
@@ -389,7 +391,7 @@ function renderBoard(pos) {
   let anyShown = false;
   for (const v of vendorsList) {
     const all = byV.get(v);
-    const shown = all.filter(matches).sort((a, b) => S.filter === "eta" ? ((a.note.eta || "").localeCompare(b.note.eta || "") || a.po.localeCompare(b.po)) : (a.open && b.open) ? (b.age - a.age || a.po.localeCompare(b.po)) : (b.date.localeCompare(a.date) || b.po.localeCompare(a.po)));
+    const shown = all.filter(matches).sort((a, b) => S.filter === "eta" ? ((a.eta || "").localeCompare(b.eta || "") || a.po.localeCompare(b.po)) : (a.open && b.open) ? (b.age - a.age || a.po.localeCompare(b.po)) : (b.date.localeCompare(a.date) || b.po.localeCompare(a.po)));
     if ((S.q || S.filter === "eta" || S.filter === "cancelled") && !shown.length) continue;
     anyShown = anyShown || shown.length > 0;
     const open = all.filter(p => p.open);
@@ -421,7 +423,7 @@ function card(p) {
   const ac = ageClass(p);
   const stages = (p.note.stages || []).filter(s => S.cfg.stages.includes(s));
   const statusTxt = p.status === "received" ? "Received" : p.status === "closed" ? "Closed" : p.status === "cancelled" ? "Cancelled" : `${p.age}d ago`;
-  const eta = p.note.eta;
+  const eta = p.eta;
   const etaPast = eta && p.open && parseISO(eta) < today();
   return `<button class="card ${p.open ? "" : "done"}" data-act="open" data-po="${esc(p.po)}">
     <div class="c-top"><span class="c-po">${esc(p.po)}</span>${p.note.star ? `<span class="c-star" title="Starred">★</span>` : ""}</div>
@@ -430,7 +432,7 @@ function card(p) {
     ${p.titles.length > 1 ? `<div class="c-more">+${p.titles.length - 1} more ${p.designs.some(g => g.print) ? "design" : "item"}${p.titles.length > 2 ? "s" : ""}</div>` : ""}
     <div class="meter ${pct >= 100 ? "full" : ""}" title="${p.rec} of ${p.ord} received"><i style="width:${pct}%"></i></div>
     <div class="c-foot"><span>Sent ${fmtShort(p.date)}</span><span class="age ${ac}">${statusTxt}</span><span class="qty">${p.rec}/${p.ord}</span></div>
-    ${eta && p.open ? `<div class="c-eta ${etaPast ? "past" : ""}" title="${etaPast ? "ETA has passed" : "Expected arrival"}">ETA ${fmtShort(eta)}${etaPast ? " · passed" : ""}</div>` : ""}
+    ${eta && p.open ? `<div class="c-eta ${etaPast ? "past" : ""}" title="${etaPast ? "ETA has passed" : "Expected arrival"}${p.etaSource === "mas" ? " (from MAS)" : ""}">ETA ${fmtShort(eta)}${etaPast ? " · passed" : ""}</div>` : ""}
     ${stages.length ? `<div class="c-stages">${stages.map(s => `<span class="tag">${esc(s)}</span>`).join("")}</div>` : ""}
     ${p.note.note ? `<div class="c-note">${esc(p.note.note)}</div>` : ""}
   </button>`;
@@ -480,9 +482,12 @@ async function renderDrawerPO() {
       <div class="d-sec">
         <h3>ETA</h3>
         <div class="row eta-row">
-          <input type="date" id="etaInput" value="${esc(p.note.eta || "")}" aria-label="Expected arrival date" ${ro ? "disabled" : ""}>
-          ${!ro && p.note.eta ? `<button class="btn" data-act="clearEta">Clear</button>` : ""}
-          <span class="hint">${p.note.eta ? (p.open && parseISO(p.note.eta) < today() ? "This date has passed. Update it when the printer gives a new one." : "Shows on the card on the board.") : "When the printer says this will arrive. Shows on the card."}</span>
+          <input type="date" id="etaInput" value="${esc(p.eta)}" aria-label="Expected arrival date" ${ro ? "disabled" : ""}>
+          ${!ro && p.note.eta ? `<button class="btn" data-act="clearEta">${p.etaMAS ? "Use MAS date" : "Clear"}</button>` : ""}
+          <span class="hint">${
+            p.etaSource === "board" ? `Set on the board${p.etaMAS && p.etaMAS !== p.note.eta ? ` (MAS says ${fmtDate(p.etaMAS)})` : ""}. Imports won't change it.`
+            : p.etaSource === "mas" ? "From MAS (Required/Expire date). Updates with each import until someone sets a date here."
+            : "When the printer says this will arrive. Shows on the card."}${p.eta && p.open && parseISO(p.eta) < today() ? " This date has passed." : ""}</span>
         </div>
       </div>
       <div class="d-sec">
@@ -662,7 +667,7 @@ document.addEventListener("click", e => {
   else if (a === "star") { const p = findPO(S.openId); writeNote(p.po, { star: !p.note.star }); }
   else if (a === "stage") { const p = findPO(S.openId); const s = el.dataset.s; const cur = new Set(p.note.stages || []); cur.has(s) ? cur.delete(s) : cur.add(s); writeNote(p.po, { stages: [...cur] }); }
   else if (a === "saveNote") { const p = findPO(S.openId); const v = $("#noteText").value.trim(); if (v !== (p.note.note || "")) writeNote(p.po, { note: v }).then(() => toast("Note saved")); $("#noteText").blur(); renderDrawerPO(); }
-  else if (a === "clearEta") { const p = findPO(S.openId); writeNote(p.po, { eta: "" }).then(() => toast("ETA cleared")); }
+  else if (a === "clearEta") { const p = findPO(S.openId); writeNote(p.po, { eta: "" }).then(() => toast(p.etaMAS ? "Back to the MAS date" : "ETA cleared")); }
   else if (a === "closePO") { const p = findPO(S.openId); writeNote(p.po, { closed: !p.note.closed }); }
   else if (a === "saveSettings") saveSettings();
   else if (a === "cancelImport") { pending = null; $("#modal").hidden = true; }
@@ -673,7 +678,7 @@ document.addEventListener("change", e => {
   if (e.target.id !== "etaInput" || !S.canWrite) return;
   const p = findPO(S.openId); if (!p) return;
   const v = e.target.value;
-  if (v === (p.note.eta || "") || (v && !/^\d{4}-\d{2}-\d{2}$/.test(v))) return;
+  if (v === p.eta || (v && !/^\d{4}-\d{2}-\d{2}$/.test(v))) return;
   writeNote(p.po, { eta: v }).then(() => toast(v ? `ETA set to ${fmtDate(v)}` : "ETA cleared"));
   e.target.blur();
 });
@@ -714,7 +719,7 @@ function startData() {
 }
 function boot() {
   const cfg = window.FIREBASE_CONFIG;
-  if (window.ImportCore && !window.ImportCore.sheetsToIncoming) { S.setupMsg = `<div class="empty"><h2>Update loading</h2><p>An older copy of the board is cached. Reload the page in a minute (Ctrl + F5).</p></div>`; S.loaded.months = true; render(); return; }
+  if (window.ImportCore && !window.ImportCore.ALIASES.eta) { S.setupMsg = `<div class="empty"><h2>Update loading</h2><p>An older copy of the board is cached. Reload the page in a minute (Ctrl + F5).</p></div>`; S.loaded.months = true; render(); return; }
   if (!window.firebase || !window.ImportCore || !cfg || !cfg.apiKey || /^PASTE/.test(cfg.apiKey)) {
     S.setupMsg = `<div class="empty"><h2>Not connected yet</h2><p>Paste your Firebase project settings into firebase-config.js. The README walks through it.</p></div>`;
     S.loaded.months = true; render(); return;
